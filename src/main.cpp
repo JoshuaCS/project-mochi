@@ -18,6 +18,10 @@ enum class GameState { TITLE, CREDIT, EGG, HATCHING, ALIVE, DIED };
 GameState gameState = GameState::TITLE;
 unsigned long creditEnteredAt = 0;
 unsigned long hatchStartedAt  = 0;
+unsigned long aliveStartedAt  = 0;
+
+uint8_t hungerLevel = 20;  // 0–100
+uint8_t loveLevel   = 100; // 0–100
 
 void drawTitle() {
   u8g2.drawXBMP(0, 0, 128, 30, title_f0);
@@ -41,10 +45,35 @@ void drawHatching() {
   u8g2.drawXBMP(16, 16, TIA_WIDTH, TIA_HEIGHT, tia_frames[frame]);
 }
 
+void drawStatBars() {
+  u8g2.setFont(u8g2_font_4x6_tr);
+
+  // Hunger bar — left half
+  u8g2.drawStr(1, 7, "H");
+  u8g2.drawFrame(8, 1, 54, 6);
+  u8g2.drawBox(9, 2, (52 * hungerLevel) / 100, 4);
+
+  // Love bar — right half
+  u8g2.drawStr(66, 7, "L");
+  u8g2.drawFrame(73, 1, 54, 6);
+  u8g2.drawBox(74, 2, (52 * loveLevel) / 100, 4);
+}
+
 void drawAlive() {
-  // Tia frame 2 on the left, speech bubble to her right
-  u8g2.drawXBMP(16, 16, TIA_WIDTH, TIA_HEIGHT, tia_frames[2]);
-  u8g2.drawXBMP(16 + TIA_WIDTH + 4, 8, SPEECH_WIDTH, SPEECH_HEIGHT, speech_f0);
+  drawStatBars();
+
+  bool showSpeech = (millis() - aliveStartedAt) < 2000;
+
+  if (showSpeech) {
+    // Tia left, speech bubble to her right
+    u8g2.drawXBMP(16, 10, TIA_WIDTH, TIA_HEIGHT, tia_frames[2]);
+    u8g2.drawXBMP(16 + TIA_WIDTH + 4, 10, SPEECH_WIDTH, SPEECH_HEIGHT, speech_f0);
+  } else {
+    // Tia centred in the space below the stat bars
+    uint8_t tiaX = (128 - TIA_WIDTH) / 2;
+    uint8_t tiaY = 8 + (56 - TIA_HEIGHT) / 2;
+    u8g2.drawXBMP(tiaX, tiaY, TIA_WIDTH, TIA_HEIGHT, tia_frames[2]);
+  }
 }
 
 void drawCredits() {
@@ -80,7 +109,10 @@ void loop() {
       }
       break;
     case GameState::HATCHING:
-      if (millis() - hatchStartedAt >= 6000) gameState = GameState::ALIVE;
+      if (millis() - hatchStartedAt >= 6000) {
+        gameState = GameState::ALIVE;
+        aliveStartedAt = millis();
+      }
       break;
     case GameState::ALIVE: break;
     case GameState::DIED:  break;
