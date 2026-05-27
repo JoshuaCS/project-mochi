@@ -45,6 +45,9 @@ void drawHatching() {
   u8g2.drawXBMP(16, 16, TIA_WIDTH, TIA_HEIGHT, tia_frames[frame]);
 }
 
+// 7×6 heart icon (XBM: LSB-first, one byte per row)
+static const uint8_t heartIcon[] PROGMEM = { 0x36, 0x7F, 0x7F, 0x3E, 0x1C, 0x08 };
+
 void drawStatBars() {
   u8g2.setFont(u8g2_font_4x6_tr);
 
@@ -53,10 +56,10 @@ void drawStatBars() {
   u8g2.drawFrame(8, 1, 54, 6);
   u8g2.drawBox(9, 2, (52 * hungerLevel) / 100, 4);
 
-  // Love bar — right half
-  u8g2.drawStr(66, 7, "L");
-  u8g2.drawFrame(73, 1, 54, 6);
-  u8g2.drawBox(74, 2, (52 * loveLevel) / 100, 4);
+  // Love bar — right half (heart icon instead of "L")
+  u8g2.drawXBMP(66, 1, 7, 6, heartIcon);
+  u8g2.drawFrame(75, 1, 52, 6);
+  u8g2.drawBox(76, 2, (50 * loveLevel) / 100, 4);
 }
 
 void drawAlive() {
