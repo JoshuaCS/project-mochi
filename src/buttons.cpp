@@ -12,6 +12,21 @@ static ButtonState left   = { false, false, 0 };
 static ButtonState middle = { false, false, 0 };
 static ButtonState right  = { false, false, 0 };
 
+// Serial key flags — set by pollSerial(), consumed once per read.
+static bool serialLeft   = false;
+static bool serialMiddle = false;
+static bool serialRight  = false;
+
+// Drain the serial buffer and latch any l/m/r keypresses.
+static void pollSerial() {
+  while (Serial.available()) {
+    char c = Serial.read();
+    if      (c == 'l' || c == 'L') serialLeft   = true;
+    else if (c == 'm' || c == 'M') serialMiddle = true;
+    else if (c == 'r' || c == 'R') serialRight  = true;
+  }
+}
+
 void buttonsSetup() {
   pinMode(BTN_LEFT,   INPUT_PULLUP);
   pinMode(BTN_MIDDLE, INPUT_PULLUP);
@@ -35,6 +50,20 @@ static bool checkPressed(uint8_t pin, ButtonState& btn) {
   return false;
 }
 
-bool leftButtonPressed()   { return checkPressed(BTN_LEFT,   left);   }
-bool middleButtonPressed()  { return checkPressed(BTN_MIDDLE, middle);  }
-bool rightButtonPressed()  { return checkPressed(BTN_RIGHT,  right);  }
+bool leftButtonPressed() {
+  pollSerial();
+  if (serialLeft)   { serialLeft   = false; return true; }
+  return checkPressed(BTN_LEFT, left);
+}
+
+bool middleButtonPressed() {
+  pollSerial();
+  if (serialMiddle) { serialMiddle = false; return true; }
+  return checkPressed(BTN_MIDDLE, middle);
+}
+
+bool rightButtonPressed() {
+  pollSerial();
+  if (serialRight)  { serialRight  = false; return true; }
+  return checkPressed(BTN_RIGHT, right);
+}
