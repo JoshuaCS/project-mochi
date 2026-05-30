@@ -64,7 +64,9 @@ const char* const* activeMenuOptions = MENU_OPTIONS_ALIVE;
 uint8_t activeMenuOptionCount = 3;
 
 bool isInGameLoop() {
-  return gameState == GameState::ALIVE || gameState == GameState::SLEEPING;
+  return gameState == GameState::ALIVE
+      || gameState == GameState::SLEEPING
+      || gameState == GameState::FEEDING;
 }
 
 void resetGame() {
@@ -200,6 +202,30 @@ void loop() {
   bool anyButton = leftBtn || middleBtn || rightBtn;
 
   // --- State transitions ---
+  if (isInGameLoop()) {
+    unsigned long now = millis();
+    if (now - lastHungerDepletedAt >= (60000UL / HUNGER_DEPLETION_PER_MIN)) {
+      if (hungerLevel > 0) hungerLevel--;
+      lastHungerDepletedAt = now;
+      if (!hungerAlertFired && hungerLevel < HUNGER_ALERT_THRESHOLD) {
+        Serial.print("WARNING: hunger below "); Serial.print(HUNGER_ALERT_THRESHOLD); Serial.println("%");
+        hungerAlertFired = true;
+      }
+    }
+    if (now - lastLoveDepletedAt >= (60000UL / LOVE_DEPLETION_PER_MIN)) {
+      if (loveLevel > 0) loveLevel--;
+      lastLoveDepletedAt = now;
+      if (!loveAlertFired && loveLevel < LOVE_ALERT_THRESHOLD) {
+        Serial.print("WARNING: love below "); Serial.print(LOVE_ALERT_THRESHOLD); Serial.println("%");
+        loveAlertFired = true;
+      }
+    }
+    if (hungerLevel == 0 || loveLevel == 0) {
+      Serial.println("Tia died.");
+      gameState = GameState::DIED;
+    }
+  }
+
   if (isInGameLoop() && middleBtn) {
     menuReturnState   = gameState;
     menuSelectedIndex = 0;
@@ -237,22 +263,6 @@ void loop() {
       break;
     case GameState::ALIVE: {
       unsigned long now = millis();
-      if (now - lastHungerDepletedAt >= (60000UL / HUNGER_DEPLETION_PER_MIN)) {
-        if (hungerLevel > 0) hungerLevel--;
-        lastHungerDepletedAt = now;
-        if (!hungerAlertFired && hungerLevel < HUNGER_ALERT_THRESHOLD) {
-          Serial.print("WARNING: hunger below "); Serial.print(HUNGER_ALERT_THRESHOLD); Serial.println("%");
-          hungerAlertFired = true;
-        }
-      }
-      if (now - lastLoveDepletedAt >= (60000UL / LOVE_DEPLETION_PER_MIN)) {
-        if (loveLevel > 0) loveLevel--;
-        lastLoveDepletedAt = now;
-        if (!loveAlertFired && loveLevel < LOVE_ALERT_THRESHOLD) {
-          Serial.print("WARNING: love below "); Serial.print(LOVE_ALERT_THRESHOLD); Serial.println("%");
-          loveAlertFired = true;
-        }
-      }
       if (now - lastEepDepletedAt >= (60000UL / EEP_ACCUMULATE_PER_MIN)) {
         if (eepLevel < 100) eepLevel++;
         lastEepDepletedAt = now;
@@ -267,10 +277,6 @@ void loop() {
           eepAlertFired     = false;
           gameState         = GameState::SLEEPING;
         }
-      }
-      if (hungerLevel == 0 || loveLevel == 0) {
-        Serial.println("Tia died.");
-        gameState = GameState::DIED;
       }
       break;
     }
