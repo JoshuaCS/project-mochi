@@ -30,29 +30,29 @@ static const uint16_t FEEDING_DURATION_MS = 3000;
 
 // Depletion rate in bar units (0–100) per minute for each stat
 static const uint8_t HUNGER_DEPLETION_PER_MIN = 25;
-static const uint8_t LOVE_DEPLETION_PER_MIN   = 25;
+static const uint8_t HAPPINESS_DEPLETION_PER_MIN   = 25; // only when hunger < 50%
 static const uint8_t EEP_ACCUMULATE_PER_MIN   = 25;  // rate eepiness builds while awake
 static const uint8_t EEP_RECHARGE_PER_MIN     = 50; // rate eepiness drains while sleeping
 
 // Alert thresholds
 static const uint8_t HUNGER_ALERT_THRESHOLD = 20;
-static const uint8_t LOVE_ALERT_THRESHOLD   = 20;
+static const uint8_t HAPPINESS_ALERT_THRESHOLD   = 20;
 static const uint8_t EEP_ALERT_THRESHOLD    = 80; // fires when eepiness gets high
 
 static const uint8_t HUNGER_DEFAULT = 100;
-static const uint8_t LOVE_DEFAULT   = 100;
+static const uint8_t HAPPINESS_DEFAULT   = 100;
 static const uint8_t EEP_DEFAULT    = 80;
 
 uint8_t hungerLevel = HUNGER_DEFAULT;
-uint8_t loveLevel   = LOVE_DEFAULT;
+uint8_t happinessLevel   = HAPPINESS_DEFAULT;
 uint8_t eepLevel    = EEP_DEFAULT;
 
 bool hungerAlertFired = false;
-bool loveAlertFired   = false;
+bool happinessAlertFired   = false;
 bool eepAlertFired    = false;
 
 unsigned long lastHungerDepletedAt = 0;
-unsigned long lastLoveDepletedAt   = 0;
+unsigned long lastHappinessDepletedAt   = 0;
 unsigned long lastEepDepletedAt    = 0;
 
 GameState menuReturnState  = GameState::ALIVE;
@@ -71,10 +71,10 @@ bool isInGameLoop() {
 
 void resetGame() {
   hungerLevel      = HUNGER_DEFAULT;
-  loveLevel        = LOVE_DEFAULT;
+  happinessLevel        = HAPPINESS_DEFAULT;
   eepLevel         = EEP_DEFAULT;
   hungerAlertFired = false;
-  loveAlertFired   = false;
+  happinessAlertFired   = false;
   eepAlertFired    = false;
   gameState        = GameState::TITLE;
 }
@@ -101,8 +101,10 @@ void drawHatching() {
   u8g2.drawXBMP(16, 16, TIA_WIDTH, TIA_HEIGHT, tia_frames[frame]);
 }
 
-// 7×6 heart icon (XBM: LSB-first, one byte per row)
-static const uint8_t heartIcon[] PROGMEM = { 0x36, 0x7F, 0x7F, 0x3E, 0x1C, 0x08 };
+// 7×6 face icons (XBM: LSB-first, one byte per row) — eyes at cols 2,4; mouth varies
+static const uint8_t faceHappy[]   PROGMEM = { 0x00, 0x14, 0x00, 0x41, 0x3E, 0x00 }; // smile
+static const uint8_t faceNeutral[] PROGMEM = { 0x00, 0x14, 0x00, 0x3E, 0x00, 0x00 }; // line
+static const uint8_t faceFrown[]   PROGMEM = { 0x00, 0x14, 0x00, 0x3E, 0x41, 0x00 }; // frown
 
 void drawStatBars() {
   u8g2.setFont(u8g2_font_4x6_tr);
@@ -116,9 +118,12 @@ void drawStatBars() {
   u8g2.drawFrame(53, 1, 30, 6);
   u8g2.drawBox(54, 2, (28 * eepLevel) / 100, 4);
 
-  u8g2.drawXBMP(88, 1, 7, 6, heartIcon);
+  const uint8_t* faceIcon = (happinessLevel >= 60) ? faceHappy
+                          : (happinessLevel >= 30) ? faceNeutral
+                          :                          faceFrown;
+  u8g2.drawXBMP(88, 1, 7, 6, faceIcon);
   u8g2.drawFrame(96, 1, 31, 6);
-  u8g2.drawBox(97, 2, (29 * loveLevel) / 100, 4);
+  u8g2.drawBox(97, 2, (29 * happinessLevel) / 100, 4);
 }
 
 void drawAlive() {
@@ -189,7 +194,7 @@ void setup() {
   if (DEV_MODE) {
     aliveStartedAt       = millis();
     lastHungerDepletedAt = aliveStartedAt;
-    lastLoveDepletedAt   = aliveStartedAt;
+    lastHappinessDepletedAt   = aliveStartedAt;
     lastEepDepletedAt    = aliveStartedAt;
   }
 }
@@ -212,15 +217,15 @@ void loop() {
         hungerAlertFired = true;
       }
     }
-    if (now - lastLoveDepletedAt >= (60000UL / LOVE_DEPLETION_PER_MIN)) {
-      if (loveLevel > 0) loveLevel--;
-      lastLoveDepletedAt = now;
-      if (!loveAlertFired && loveLevel < LOVE_ALERT_THRESHOLD) {
-        Serial.print("WARNING: love below "); Serial.print(LOVE_ALERT_THRESHOLD); Serial.println("%");
-        loveAlertFired = true;
+    if (hungerLevel < 50 && now - lastHappinessDepletedAt >= (60000UL / HAPPINESS_DEPLETION_PER_MIN)) {
+      if (happinessLevel > 0) happinessLevel--;
+      lastHappinessDepletedAt = now;
+      if (!happinessAlertFired && happinessLevel < HAPPINESS_ALERT_THRESHOLD) {
+        Serial.print("WARNING: happiness below "); Serial.print(HAPPINESS_ALERT_THRESHOLD); Serial.println("%");
+        happinessAlertFired = true;
       }
     }
-    if (hungerLevel == 0 || loveLevel == 0) {
+    if (hungerLevel == 0 || happinessLevel == 0) {
       Serial.println("Tia died.");
       gameState = GameState::DIED;
     }
@@ -257,7 +262,7 @@ void loop() {
         gameState = GameState::ALIVE;
         aliveStartedAt = millis();
         lastHungerDepletedAt = aliveStartedAt;
-        lastLoveDepletedAt   = aliveStartedAt;
+        lastHappinessDepletedAt   = aliveStartedAt;
         lastEepDepletedAt    = aliveStartedAt;
       }
       break;
@@ -290,7 +295,7 @@ void loop() {
         Serial.println("Tia woke up.");
         aliveStartedAt       = millis();
         lastHungerDepletedAt = aliveStartedAt;
-        lastLoveDepletedAt   = aliveStartedAt;
+        lastHappinessDepletedAt   = aliveStartedAt;
         lastEepDepletedAt    = aliveStartedAt;
         gameState            = GameState::ALIVE;
       }
@@ -308,7 +313,7 @@ void loop() {
             if (menuReturnState == GameState::SLEEPING) {
               aliveStartedAt       = millis();
               lastHungerDepletedAt = aliveStartedAt;
-              lastLoveDepletedAt   = aliveStartedAt;
+              lastHappinessDepletedAt   = aliveStartedAt;
               lastEepDepletedAt    = aliveStartedAt;
               gameState            = GameState::ALIVE;
             } else {
@@ -330,7 +335,7 @@ void loop() {
         hungerLevel  = 100;
         aliveStartedAt = millis();
         lastHungerDepletedAt = aliveStartedAt;
-        lastLoveDepletedAt   = aliveStartedAt;
+        lastHappinessDepletedAt   = aliveStartedAt;
         lastEepDepletedAt    = aliveStartedAt;
         gameState    = GameState::ALIVE;
       }

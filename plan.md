@@ -49,3 +49,10 @@ The game is a tamagotchi-like game, but focused on Tia
 - Eep Bar
 - Hunger Bar
 - Happiness Bar
+
+# Ways to make Tia happy
+
+- Feed her pizza
+- Let her nap
+- Play with her kitty friends
+- Play a game with her (like the sims) or the dinosaur game
