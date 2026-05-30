@@ -6,6 +6,7 @@
 #include "sprites/tia/tia.h"
 #include "sprites/speech/speech.h"
 #include "sprites/cross/cross.h"
+#include "sprites/pizza/pizza.h"
 #include "buttons.h"
 
 
@@ -14,7 +15,7 @@
 
 U8G2_SH1106_128X64_NONAME_F_SW_I2C u8g2(U8G2_R0, SCREEN_SCL_PIN, SCREEN_SDA_PIN, U8X8_PIN_NONE);
 
-enum class GameState { TITLE, CREDIT, EGG, HATCHING, ALIVE, SLEEPING, DIED };
+enum class GameState { TITLE, CREDIT, EGG, HATCHING, ALIVE, SLEEPING, MENU, FEEDING, DIED };
 
 static const bool DEV_MODE = true;
 
@@ -23,12 +24,15 @@ unsigned long creditEnteredAt = 0;
 unsigned long hatchStartedAt  = 0;
 unsigned long aliveStartedAt    = 0;
 unsigned long sleepingStartedAt = 0;
+unsigned long feedingStartedAt  = 0;
+
+static const uint16_t FEEDING_DURATION_MS = 3000;
 
 // Depletion rate in bar units (0–100) per minute for each stat
-static const uint8_t HUNGER_DEPLETION_PER_MIN = 5;
-static const uint8_t LOVE_DEPLETION_PER_MIN   = 5;
-static const uint8_t EEP_ACCUMULATE_PER_MIN   = 20;  // rate eepiness builds while awake
-static const uint8_t EEP_RECHARGE_PER_MIN     = 40; // rate eepiness drains while sleeping
+static const uint8_t HUNGER_DEPLETION_PER_MIN = 25;
+static const uint8_t LOVE_DEPLETION_PER_MIN   = 25;
+static const uint8_t EEP_ACCUMULATE_PER_MIN   = 25;  // rate eepiness builds while awake
+static const uint8_t EEP_RECHARGE_PER_MIN     = 50; // rate eepiness drains while sleeping
 
 // Alert thresholds
 static const uint8_t HUNGER_ALERT_THRESHOLD = 20;
@@ -50,6 +54,18 @@ bool eepAlertFired    = false;
 unsigned long lastHungerDepletedAt = 0;
 unsigned long lastLoveDepletedAt   = 0;
 unsigned long lastEepDepletedAt    = 0;
+
+GameState menuReturnState  = GameState::ALIVE;
+uint8_t   menuSelectedIndex = 0;
+
+static const char* const MENU_OPTIONS_ALIVE[]    = { "Close menu", "Go to eep", "Feed the Tia" };
+static const char* const MENU_OPTIONS_SLEEPING[] = { "Close menu", "Wake up" };
+const char* const* activeMenuOptions = MENU_OPTIONS_ALIVE;
+uint8_t activeMenuOptionCount = 3;
+
+bool isInGameLoop() {
+  return gameState == GameState::ALIVE || gameState == GameState::SLEEPING;
+}
 
 void resetGame() {
   hungerLevel      = HUNGER_DEFAULT;
@@ -128,6 +144,32 @@ void drawSleeping() {
   u8g2.drawXBMP(tiaX, tiaY, TIA_WIDTH, TIA_HEIGHT, tia_frames[frame]);
 }
 
+void drawMenu() {
+  u8g2.setFont(u8g2_font_5x7_tr);
+  u8g2.drawStr((128 - 5 * 4) / 2, 8, "MENU");
+  u8g2.drawHLine(0, 10, 128);
+  for (uint8_t i = 0; i < activeMenuOptionCount; i++) {
+    uint8_t y = 22 + i * 14;
+    if (i == menuSelectedIndex) {
+      u8g2.drawBox(0, y - 8, 128, 10);
+      u8g2.setDrawColor(0);
+      u8g2.drawStr(4, y, activeMenuOptions[i]);
+      u8g2.setDrawColor(1);
+    } else {
+      u8g2.drawStr(4, y, activeMenuOptions[i]);
+    }
+  }
+}
+
+void drawFeeding() {
+  drawStatBars();
+  uint8_t tiaFrame = 5 + (millis() / 100) % 2; // alternates tia_f5 ↔ tia_f6
+  uint8_t tiaY   = 8 + (56 - TIA_HEIGHT)  / 2;
+  uint8_t pizzaY = 8 + (56 - PIZZA_HEIGHT) / 2;
+  u8g2.drawXBMP(0,  tiaY,   TIA_WIDTH,  TIA_HEIGHT,  tia_frames[tiaFrame]);
+  u8g2.drawXBMP(TIA_WIDTH + 4, pizzaY, PIZZA_WIDTH, PIZZA_HEIGHT, pizza_f0);
+}
+
 void drawDied() {
   u8g2.setFont(u8g2_font_9x15_tr);
   u8g2.drawStr((128 - 9 * 8) / 2, 12, "Tia Died");
@@ -152,9 +194,21 @@ void setup() {
 
 void loop() {
   // --- Input ---
-  bool anyButton = leftButtonPressed() || middleButtonPressed() || rightButtonPressed();
+  bool leftBtn   = leftButtonPressed();
+  bool middleBtn = middleButtonPressed();
+  bool rightBtn  = rightButtonPressed();
+  bool anyButton = leftBtn || middleBtn || rightBtn;
 
   // --- State transitions ---
+  if (isInGameLoop() && middleBtn) {
+    menuReturnState   = gameState;
+    menuSelectedIndex = 0;
+    activeMenuOptions     = (gameState == GameState::SLEEPING) ? MENU_OPTIONS_SLEEPING : MENU_OPTIONS_ALIVE;
+    activeMenuOptionCount = (gameState == GameState::SLEEPING) ? 2 : 3;
+    gameState         = GameState::MENU;
+    middleBtn         = false; // prevent MENU case acting on the same press
+  }
+
   switch (gameState) {
     case GameState::TITLE:
       if (anyButton) {
@@ -236,6 +290,45 @@ void loop() {
       }
       break;
     }
+    case GameState::MENU: {
+      if (leftBtn)  menuSelectedIndex = (menuSelectedIndex + activeMenuOptionCount - 1) % activeMenuOptionCount;
+      if (rightBtn) menuSelectedIndex = (menuSelectedIndex + 1) % activeMenuOptionCount;
+      if (middleBtn) {
+        switch (menuSelectedIndex) {
+          case 0: // Close menu
+            gameState = menuReturnState;
+            break;
+          case 1: // Go to eep / Wake up
+            if (menuReturnState == GameState::SLEEPING) {
+              aliveStartedAt       = millis();
+              lastHungerDepletedAt = aliveStartedAt;
+              lastLoveDepletedAt   = aliveStartedAt;
+              lastEepDepletedAt    = aliveStartedAt;
+              gameState            = GameState::ALIVE;
+            } else {
+              sleepingStartedAt = millis();
+              lastEepDepletedAt = sleepingStartedAt;
+              gameState         = GameState::SLEEPING;
+            }
+            break;
+          case 2: // Feed the Tia
+            feedingStartedAt = millis();
+            gameState        = GameState::FEEDING;
+            break;
+        }
+      }
+      break;
+    }
+    case GameState::FEEDING:
+      if (millis() - feedingStartedAt >= FEEDING_DURATION_MS) {
+        hungerLevel  = 100;
+        aliveStartedAt = millis();
+        lastHungerDepletedAt = aliveStartedAt;
+        lastLoveDepletedAt   = aliveStartedAt;
+        lastEepDepletedAt    = aliveStartedAt;
+        gameState    = GameState::ALIVE;
+      }
+      break;
     case GameState::DIED:
       if (anyButton) resetGame();
       break;
@@ -251,6 +344,8 @@ void loop() {
     case GameState::HATCHING: drawHatching(); break;
     case GameState::ALIVE:    drawAlive();    break;
     case GameState::SLEEPING: drawSleeping(); break;
+    case GameState::MENU:     drawMenu();     break;
+    case GameState::FEEDING:  drawFeeding();  break;
     case GameState::DIED:     drawDied();     break;
   }
 
