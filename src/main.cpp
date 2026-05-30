@@ -30,7 +30,11 @@ static const uint16_t FEEDING_DURATION_MS = 3000;
 
 // Depletion rate in bar units (0–100) per minute for each stat
 static const uint8_t HUNGER_DEPLETION_PER_MIN = 25;
-static const uint8_t HAPPINESS_DEPLETION_PER_MIN   = 25; // only when hunger < 50%
+static const uint8_t HAPPINESS_PASSIVE_DRAIN_PER_MIN = 1;  // always drains
+static const uint8_t HAPPINESS_SLEEPY_DRAIN_PER_MIN  = 10; // extra drain when eep above threshold
+static const uint8_t HAPPINESS_SLEEPY_THRESHOLD      = 70; // eep % that triggers extra drain
+static const uint8_t HAPPINESS_FEED_BONUS            = 10; // happiness gained from feeding
+static const uint8_t HAPPINESS_SLEEP_BONUS           = 10; // happiness gained from waking up
 static const uint8_t EEP_ACCUMULATE_PER_MIN   = 25;  // rate eepiness builds while awake
 static const uint8_t EEP_RECHARGE_PER_MIN     = 50; // rate eepiness drains while sleeping
 
@@ -51,9 +55,12 @@ bool hungerAlertFired = false;
 bool happinessAlertFired   = false;
 bool eepAlertFired    = false;
 
-unsigned long lastHungerDepletedAt = 0;
-unsigned long lastHappinessDepletedAt   = 0;
-unsigned long lastEepDepletedAt    = 0;
+unsigned long lastHungerDepletedAt        = 0;
+unsigned long lastHappinessDepletedAt     = 0;
+unsigned long lastHappinessSleepyAt       = 0;
+unsigned long lastEepDepletedAt           = 0;
+
+const char* deathReason = "";
 
 GameState menuReturnState  = GameState::ALIVE;
 uint8_t   menuSelectedIndex = 0;
@@ -179,8 +186,10 @@ void drawFeeding() {
 
 void drawDied() {
   u8g2.setFont(u8g2_font_9x15_tr);
-  u8g2.drawStr((128 - 9 * 8) / 2, 12, "Tia Died");
-  u8g2.drawXBMP((128 - CROSS_WIDTH) / 2, 18, CROSS_WIDTH, CROSS_HEIGHT, cross_f0);
+  u8g2.drawStr((128 - 9 * 8) / 2, 10, "Tia Died");
+  u8g2.setFont(u8g2_font_5x7_tr);
+  u8g2.drawStr((128 - u8g2.getStrWidth(deathReason)) / 2, 20, deathReason);
+  u8g2.drawXBMP((128 - CROSS_WIDTH) / 2, 24, CROSS_WIDTH, CROSS_HEIGHT, cross_f0);
 }
 
 void drawCredits() {
@@ -217,7 +226,7 @@ void loop() {
         hungerAlertFired = true;
       }
     }
-    if (hungerLevel < 50 && now - lastHappinessDepletedAt >= (60000UL / HAPPINESS_DEPLETION_PER_MIN)) {
+    if (now - lastHappinessDepletedAt >= (60000UL / HAPPINESS_PASSIVE_DRAIN_PER_MIN)) {
       if (happinessLevel > 0) happinessLevel--;
       lastHappinessDepletedAt = now;
       if (!happinessAlertFired && happinessLevel < HAPPINESS_ALERT_THRESHOLD) {
@@ -225,8 +234,13 @@ void loop() {
         happinessAlertFired = true;
       }
     }
+    if (eepLevel > HAPPINESS_SLEEPY_THRESHOLD && now - lastHappinessSleepyAt >= (60000UL / HAPPINESS_SLEEPY_DRAIN_PER_MIN)) {
+      if (happinessLevel > 0) happinessLevel--;
+      lastHappinessSleepyAt = now;
+    }
     if (hungerLevel == 0 || happinessLevel == 0) {
-      Serial.println("Tia died.");
+      deathReason = (hungerLevel == 0) ? "Died of Starvation" : "Died of Sadness";
+      Serial.print("Tia died: "); Serial.println(deathReason);
       gameState = GameState::DIED;
     }
   }
@@ -261,9 +275,10 @@ void loop() {
       if (millis() - hatchStartedAt >= 6000) {
         gameState = GameState::ALIVE;
         aliveStartedAt = millis();
-        lastHungerDepletedAt = aliveStartedAt;
-        lastHappinessDepletedAt   = aliveStartedAt;
-        lastEepDepletedAt    = aliveStartedAt;
+        lastHungerDepletedAt    = aliveStartedAt;
+        lastHappinessDepletedAt = aliveStartedAt;
+        lastHappinessSleepyAt   = aliveStartedAt;
+        lastEepDepletedAt       = aliveStartedAt;
       }
       break;
     case GameState::ALIVE: {
@@ -293,11 +308,13 @@ void loop() {
       }
       if (eepLevel == 0) {
         Serial.println("Tia woke up.");
-        aliveStartedAt       = millis();
-        lastHungerDepletedAt = aliveStartedAt;
-        lastHappinessDepletedAt   = aliveStartedAt;
-        lastEepDepletedAt    = aliveStartedAt;
-        gameState            = GameState::ALIVE;
+        happinessLevel = (happinessLevel + HAPPINESS_SLEEP_BONUS > 100) ? 100 : happinessLevel + HAPPINESS_SLEEP_BONUS;
+        aliveStartedAt        = millis();
+        lastHungerDepletedAt  = aliveStartedAt;
+        lastHappinessDepletedAt = aliveStartedAt;
+        lastHappinessSleepyAt = aliveStartedAt;
+        lastEepDepletedAt     = aliveStartedAt;
+        gameState             = GameState::ALIVE;
       }
       break;
     }
@@ -311,11 +328,13 @@ void loop() {
             break;
           case 1: // Go to eep / Wake up
             if (menuReturnState == GameState::SLEEPING) {
-              aliveStartedAt       = millis();
-              lastHungerDepletedAt = aliveStartedAt;
-              lastHappinessDepletedAt   = aliveStartedAt;
-              lastEepDepletedAt    = aliveStartedAt;
-              gameState            = GameState::ALIVE;
+              happinessLevel = (happinessLevel + HAPPINESS_SLEEP_BONUS > 100) ? 100 : happinessLevel + HAPPINESS_SLEEP_BONUS;
+              aliveStartedAt          = millis();
+              lastHungerDepletedAt    = aliveStartedAt;
+              lastHappinessDepletedAt = aliveStartedAt;
+              lastHappinessSleepyAt   = aliveStartedAt;
+              lastEepDepletedAt       = aliveStartedAt;
+              gameState               = GameState::ALIVE;
             } else {
               sleepingStartedAt = millis();
               lastEepDepletedAt = sleepingStartedAt;
@@ -332,11 +351,13 @@ void loop() {
     }
     case GameState::FEEDING:
       if (millis() - feedingStartedAt >= FEEDING_DURATION_MS) {
-        hungerLevel  = 100;
-        aliveStartedAt = millis();
-        lastHungerDepletedAt = aliveStartedAt;
-        lastHappinessDepletedAt   = aliveStartedAt;
-        lastEepDepletedAt    = aliveStartedAt;
+        hungerLevel    = 100;
+        happinessLevel = (happinessLevel + HAPPINESS_FEED_BONUS > 100) ? 100 : happinessLevel + HAPPINESS_FEED_BONUS;
+        aliveStartedAt          = millis();
+        lastHungerDepletedAt    = aliveStartedAt;
+        lastHappinessDepletedAt = aliveStartedAt;
+        lastHappinessSleepyAt   = aliveStartedAt;
+        lastEepDepletedAt       = aliveStartedAt;
         gameState    = GameState::ALIVE;
       }
       break;
