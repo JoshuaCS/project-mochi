@@ -14,27 +14,29 @@
 
 U8G2_SH1106_128X64_NONAME_F_SW_I2C u8g2(U8G2_R0, SCREEN_SCL_PIN, SCREEN_SDA_PIN, U8X8_PIN_NONE);
 
-enum class GameState { TITLE, CREDIT, EGG, HATCHING, ALIVE, DIED };
+enum class GameState { TITLE, CREDIT, EGG, HATCHING, ALIVE, SLEEPING, DIED };
 
 static const bool DEV_MODE = true;
 
 GameState gameState = DEV_MODE ? GameState::ALIVE : GameState::TITLE;
 unsigned long creditEnteredAt = 0;
 unsigned long hatchStartedAt  = 0;
-unsigned long aliveStartedAt  = 0;
+unsigned long aliveStartedAt    = 0;
+unsigned long sleepingStartedAt = 0;
 
 // Depletion rate in bar units (0–100) per minute for each stat
 static const uint8_t HUNGER_DEPLETION_PER_MIN = 5;
 static const uint8_t LOVE_DEPLETION_PER_MIN   = 5;
-static const uint8_t EEP_DEPLETION_PER_MIN    = 5;
+static const uint8_t EEP_ACCUMULATE_PER_MIN   = 20;  // rate eepiness builds while awake
+static const uint8_t EEP_RECHARGE_PER_MIN     = 40; // rate eepiness drains while sleeping
 
-// Alert thresholds — serial warning fires once when level crosses below
+// Alert thresholds
 static const uint8_t HUNGER_ALERT_THRESHOLD = 20;
 static const uint8_t LOVE_ALERT_THRESHOLD   = 20;
-static const uint8_t EEP_ALERT_THRESHOLD    = 20;
+static const uint8_t EEP_ALERT_THRESHOLD    = 80; // fires when eepiness gets high
 
-static const uint8_t HUNGER_DEFAULT = 21;
-static const uint8_t LOVE_DEFAULT   = 21;
+static const uint8_t HUNGER_DEFAULT = 100;
+static const uint8_t LOVE_DEFAULT   = 100;
 static const uint8_t EEP_DEFAULT    = 80;
 
 uint8_t hungerLevel = HUNGER_DEFAULT;
@@ -118,6 +120,14 @@ void drawAlive() {
   }
 }
 
+void drawSleeping() {
+  drawStatBars();
+  uint8_t frame = 3 + (millis() / 500) % 2; // loops tia_f3 ↔ tia_f4
+  uint8_t tiaX = (128 - TIA_WIDTH) / 2;
+  uint8_t tiaY = 8 + (56 - TIA_HEIGHT) / 2;
+  u8g2.drawXBMP(tiaX, tiaY, TIA_WIDTH, TIA_HEIGHT, tia_frames[frame]);
+}
+
 void drawDied() {
   u8g2.setFont(u8g2_font_9x15_tr);
   u8g2.drawStr((128 - 9 * 8) / 2, 12, "Tia Died");
@@ -189,17 +199,40 @@ void loop() {
           loveAlertFired = true;
         }
       }
-      if (now - lastEepDepletedAt >= (60000UL / EEP_DEPLETION_PER_MIN)) {
-        if (eepLevel > 0) eepLevel--;
+      if (now - lastEepDepletedAt >= (60000UL / EEP_ACCUMULATE_PER_MIN)) {
+        if (eepLevel < 100) eepLevel++;
         lastEepDepletedAt = now;
-        if (!eepAlertFired && eepLevel < EEP_ALERT_THRESHOLD) {
-          Serial.print("WARNING: sleep below "); Serial.print(EEP_ALERT_THRESHOLD); Serial.println("%");
+        if (!eepAlertFired && eepLevel >= EEP_ALERT_THRESHOLD) {
+          Serial.print("WARNING: getting sleepy - eep at "); Serial.print(eepLevel); Serial.println("%");
           eepAlertFired = true;
+        }
+        if (eepLevel >= 100) {
+          Serial.println("Tia fell asleep.");
+          sleepingStartedAt = millis();
+          lastEepDepletedAt = sleepingStartedAt;
+          eepAlertFired     = false;
+          gameState         = GameState::SLEEPING;
         }
       }
       if (hungerLevel == 0 || loveLevel == 0) {
         Serial.println("Tia died.");
         gameState = GameState::DIED;
+      }
+      break;
+    }
+    case GameState::SLEEPING: {
+      unsigned long now = millis();
+      if (now - lastEepDepletedAt >= (60000UL / EEP_RECHARGE_PER_MIN)) {
+        if (eepLevel > 0) eepLevel--;
+        lastEepDepletedAt = now;
+      }
+      if (eepLevel == 0) {
+        Serial.println("Tia woke up.");
+        aliveStartedAt       = millis();
+        lastHungerDepletedAt = aliveStartedAt;
+        lastLoveDepletedAt   = aliveStartedAt;
+        lastEepDepletedAt    = aliveStartedAt;
+        gameState            = GameState::ALIVE;
       }
       break;
     }
@@ -217,7 +250,8 @@ void loop() {
     case GameState::EGG:      drawEgg();      break;
     case GameState::HATCHING: drawHatching(); break;
     case GameState::ALIVE:    drawAlive();    break;
-    case GameState::DIED: drawDied(); break;
+    case GameState::SLEEPING: drawSleeping(); break;
+    case GameState::DIED:     drawDied();     break;
   }
 
   u8g2.sendBuffer();
