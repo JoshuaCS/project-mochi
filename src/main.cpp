@@ -6,6 +6,7 @@
 #include "sprites/tia/tia.h"
 #include "sprites/speech/speech.h"
 #include "sprites/cross/cross.h"
+#include "sprites/happiness/happiness.h"
 #include "sprites/pizza/pizza.h"
 #include "buttons.h"
 
@@ -108,10 +109,6 @@ void drawHatching() {
   u8g2.drawXBMP(16, 16, TIA_WIDTH, TIA_HEIGHT, tia_frames[frame]);
 }
 
-// 7×6 face icons (XBM: LSB-first, one byte per row) — eyes at cols 2,4; mouth varies
-static const uint8_t faceHappy[]   PROGMEM = { 0x00, 0x14, 0x00, 0x41, 0x3E, 0x00 }; // smile
-static const uint8_t faceNeutral[] PROGMEM = { 0x00, 0x14, 0x00, 0x3E, 0x00, 0x00 }; // line
-static const uint8_t faceFrown[]   PROGMEM = { 0x00, 0x14, 0x00, 0x3E, 0x41, 0x00 }; // frown
 
 void drawStatBars() {
   u8g2.setFont(u8g2_font_4x6_tr);
@@ -125,10 +122,8 @@ void drawStatBars() {
   u8g2.drawFrame(53, 1, 30, 6);
   u8g2.drawBox(54, 2, (28 * eepLevel) / 100, 4);
 
-  const uint8_t* faceIcon = (happinessLevel >= 60) ? faceHappy
-                          : (happinessLevel >= 30) ? faceNeutral
-                          :                          faceFrown;
-  u8g2.drawXBMP(88, 1, 7, 6, faceIcon);
+  uint8_t happinessFrame = (happinessLevel >= 60) ? 0 : (happinessLevel >= 30) ? 1 : 2;
+  u8g2.drawXBMP(88, 0, HAPPINESS_WIDTH, HAPPINESS_HEIGHT, happiness_frames[happinessFrame]);
   u8g2.drawFrame(96, 1, 31, 6);
   u8g2.drawBox(97, 2, (29 * happinessLevel) / 100, 4);
 }
