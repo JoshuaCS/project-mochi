@@ -55,4 +55,5 @@ The game is a tamagotchi-like game, but focused on Tia
 - Feed her pizza
 - Let her nap
 - Play with her kitty friends
+- Pat the Tia
 - Play a game with her (like the sims) or the dinosaur game

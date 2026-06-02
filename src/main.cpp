@@ -4,6 +4,7 @@
 #include "sprites/title/title.h"
 #include "sprites/credits/credits.h"
 #include "sprites/tia/tia.h"
+#include "sprites/kitties/kitties.h"
 #include "sprites/speech/speech.h"
 #include "sprites/cross/cross.h"
 #include "sprites/happiness/happiness.h"
@@ -16,22 +17,31 @@
 
 U8G2_SH1106_128X64_NONAME_F_SW_I2C u8g2(U8G2_R0, SCREEN_SCL_PIN, SCREEN_SDA_PIN, U8X8_PIN_NONE);
 
-enum class GameState { TITLE, CREDIT, EGG, HATCHING, ALIVE, SLEEPING, MENU, FEEDING, DIED };
+enum class GameState { TITLE, CREDIT, EGG, HATCHING, ALIVE, SLEEPING, MENU, FEEDING, INTERACTING, DIED };
 
-static const bool DEV_MODE = true;
+static const bool DEV_MODE = false;
 
 GameState gameState = DEV_MODE ? GameState::ALIVE : GameState::TITLE;
 unsigned long creditEnteredAt = 0;
 unsigned long hatchStartedAt  = 0;
 unsigned long aliveStartedAt    = 0;
 unsigned long sleepingStartedAt = 0;
-unsigned long feedingStartedAt  = 0;
+unsigned long feedingStartedAt      = 0;
+unsigned long interactingStartedAt  = 0;
+uint8_t       interactingBonus      = 0;
+const char*   interactingLabel      = "";
 
-static const uint16_t FEEDING_DURATION_MS = 3000;
+static const uint16_t FEEDING_DURATION_MS     = 3000;
+static const uint16_t INTERACTION_DURATION_MS = 5000;
+
+static const uint8_t HAPPINESS_PAT_BONUS     = 20;
+static const uint8_t HAPPINESS_PLAY_BONUS    = 20;
+static const uint8_t HAPPINESS_KITTIES_BONUS = 20;
+static const uint8_t FEED_HUNGER_BONUS       = 50;
 
 // Depletion rate in bar units (0–100) per minute for each stat
 static const uint8_t HUNGER_DEPLETION_PER_MIN = 25;
-static const uint8_t HAPPINESS_PASSIVE_DRAIN_PER_MIN = 1;  // always drains
+static const uint8_t HAPPINESS_PASSIVE_DRAIN_PER_MIN = 20;  // always drains
 static const uint8_t HAPPINESS_SLEEPY_DRAIN_PER_MIN  = 10; // extra drain when eep above threshold
 static const uint8_t HAPPINESS_SLEEPY_THRESHOLD      = 70; // eep % that triggers extra drain
 static const uint8_t HAPPINESS_FEED_BONUS            = 10; // happiness gained from feeding
@@ -63,18 +73,30 @@ unsigned long lastEepDepletedAt           = 0;
 
 const char* deathReason = "";
 
-GameState menuReturnState  = GameState::ALIVE;
+GameState menuReturnState   = GameState::ALIVE;
 uint8_t   menuSelectedIndex = 0;
+uint8_t   menuScrollOffset  = 0;
 
-static const char* const MENU_OPTIONS_ALIVE[]    = { "Close menu", "Go to eep", "Feed the Tia" };
+static const char* const MENU_OPTIONS_ALIVE[]    = { "Close menu", "Go to eep", "Feed the Tia", "Pat the Tia", "Play with Kitties" };
 static const char* const MENU_OPTIONS_SLEEPING[] = { "Close menu", "Wake up" };
-const char* const* activeMenuOptions = MENU_OPTIONS_ALIVE;
-uint8_t activeMenuOptionCount = 3;
+const char* const* activeMenuOptions  = MENU_OPTIONS_ALIVE;
+uint8_t            activeMenuOptionCount = 6;
 
 bool isInGameLoop() {
   return gameState == GameState::ALIVE
       || gameState == GameState::SLEEPING
-      || gameState == GameState::FEEDING;
+      || gameState == GameState::FEEDING
+      || gameState == GameState::INTERACTING;
+}
+
+void addHunger(int16_t amount) {
+  int16_t v = (int16_t)hungerLevel + amount;
+  hungerLevel = (v < 0) ? 0 : (v > 100) ? 100 : (uint8_t)v;
+}
+
+void addHappiness(int16_t amount) {
+  int16_t v = (int16_t)happinessLevel + amount;
+  happinessLevel = (v < 0) ? 0 : (v > 100) ? 100 : (uint8_t)v;
 }
 
 void resetGame() {
@@ -157,15 +179,16 @@ void drawMenu() {
   u8g2.setFont(u8g2_font_5x7_tr);
   u8g2.drawStr((128 - 5 * 4) / 2, 8, "MENU");
   u8g2.drawHLine(0, 10, 128);
-  for (uint8_t i = 0; i < activeMenuOptionCount; i++) {
-    uint8_t y = 22 + i * 14;
-    if (i == menuSelectedIndex) {
-      u8g2.drawBox(0, y - 8, 128, 10);
+  for (uint8_t i = 0; i < 4 && menuScrollOffset + i < activeMenuOptionCount; i++) {
+    uint8_t itemIdx = menuScrollOffset + i;
+    uint8_t y = 20 + i * 12;
+    if (itemIdx == menuSelectedIndex) {
+      u8g2.drawBox(0, y - 7, 128, 9);
       u8g2.setDrawColor(0);
-      u8g2.drawStr(4, y, activeMenuOptions[i]);
+      u8g2.drawStr(4, y, activeMenuOptions[itemIdx]);
       u8g2.setDrawColor(1);
     } else {
-      u8g2.drawStr(4, y, activeMenuOptions[i]);
+      u8g2.drawStr(4, y, activeMenuOptions[itemIdx]);
     }
   }
 }
@@ -177,6 +200,24 @@ void drawFeeding() {
   uint8_t pizzaY = 8 + (56 - PIZZA_HEIGHT) / 2;
   u8g2.drawXBMP(0,  tiaY,   TIA_WIDTH,  TIA_HEIGHT,  tia_frames[tiaFrame]);
   u8g2.drawXBMP(TIA_WIDTH + 4, pizzaY, PIZZA_WIDTH, PIZZA_HEIGHT, pizza_f0);
+}
+
+void drawInteracting() {
+  if (interactingLabel == "Play with Kitties") {
+    uint8_t frame = (uint8_t)((millis() - interactingStartedAt) / 750) % KITTIES_FRAMES;
+    u8g2.drawXBMP(0, 0, KITTIES_WIDTH, KITTIES_HEIGHT, kitties_frames[frame]);
+  } else if (interactingLabel == "Pat the Tia") {
+    drawStatBars();
+    static const uint8_t patSeq[] = {7, 8, 9, 8};
+    uint8_t seqIdx = (uint8_t)((millis() - interactingStartedAt) / 500) % 4;
+    uint8_t tiaX = (128 - TIA_WIDTH) / 2;
+    uint8_t tiaY = 8 + (56 - TIA_HEIGHT) / 2;
+    u8g2.drawXBMP(tiaX, tiaY, TIA_WIDTH, TIA_HEIGHT, tia_frames[patSeq[seqIdx]]);
+  } else {
+    drawStatBars();
+    u8g2.setFont(u8g2_font_5x7_tr);
+    u8g2.drawStr((128 - u8g2.getStrWidth(interactingLabel)) / 2, 36, interactingLabel);
+  }
 }
 
 void drawDied() {
@@ -214,7 +255,7 @@ void loop() {
   if (isInGameLoop()) {
     unsigned long now = millis();
     if (now - lastHungerDepletedAt >= (60000UL / HUNGER_DEPLETION_PER_MIN)) {
-      if (hungerLevel > 0) hungerLevel--;
+      addHunger(-1);
       lastHungerDepletedAt = now;
       if (!hungerAlertFired && hungerLevel < HUNGER_ALERT_THRESHOLD) {
         Serial.print("WARNING: hunger below "); Serial.print(HUNGER_ALERT_THRESHOLD); Serial.println("%");
@@ -222,7 +263,7 @@ void loop() {
       }
     }
     if (now - lastHappinessDepletedAt >= (60000UL / HAPPINESS_PASSIVE_DRAIN_PER_MIN)) {
-      if (happinessLevel > 0) happinessLevel--;
+      addHappiness(-1);
       lastHappinessDepletedAt = now;
       if (!happinessAlertFired && happinessLevel < HAPPINESS_ALERT_THRESHOLD) {
         Serial.print("WARNING: happiness below "); Serial.print(HAPPINESS_ALERT_THRESHOLD); Serial.println("%");
@@ -230,7 +271,7 @@ void loop() {
       }
     }
     if (eepLevel > HAPPINESS_SLEEPY_THRESHOLD && now - lastHappinessSleepyAt >= (60000UL / HAPPINESS_SLEEPY_DRAIN_PER_MIN)) {
-      if (happinessLevel > 0) happinessLevel--;
+      addHappiness(-1);
       lastHappinessSleepyAt = now;
     }
     if (hungerLevel == 0 || happinessLevel == 0) {
@@ -244,7 +285,8 @@ void loop() {
     menuReturnState   = gameState;
     menuSelectedIndex = 0;
     activeMenuOptions     = (gameState == GameState::SLEEPING) ? MENU_OPTIONS_SLEEPING : MENU_OPTIONS_ALIVE;
-    activeMenuOptionCount = (gameState == GameState::SLEEPING) ? 2 : 3;
+    activeMenuOptionCount = (gameState == GameState::SLEEPING) ? 2 : 5;
+    menuScrollOffset      = 0;
     gameState         = GameState::MENU;
     middleBtn         = false; // prevent MENU case acting on the same press
   }
@@ -303,7 +345,7 @@ void loop() {
       }
       if (eepLevel == 0) {
         Serial.println("Tia woke up.");
-        happinessLevel = (happinessLevel + HAPPINESS_SLEEP_BONUS > 100) ? 100 : happinessLevel + HAPPINESS_SLEEP_BONUS;
+        addHappiness(HAPPINESS_SLEEP_BONUS);
         aliveStartedAt        = millis();
         lastHungerDepletedAt  = aliveStartedAt;
         lastHappinessDepletedAt = aliveStartedAt;
@@ -314,8 +356,16 @@ void loop() {
       break;
     }
     case GameState::MENU: {
-      if (leftBtn)  menuSelectedIndex = (menuSelectedIndex + activeMenuOptionCount - 1) % activeMenuOptionCount;
-      if (rightBtn) menuSelectedIndex = (menuSelectedIndex + 1) % activeMenuOptionCount;
+      if (leftBtn) {
+        menuSelectedIndex = (menuSelectedIndex + activeMenuOptionCount - 1) % activeMenuOptionCount;
+        if (menuSelectedIndex < menuScrollOffset) menuScrollOffset = menuSelectedIndex;
+        else if (menuSelectedIndex >= menuScrollOffset + 4) menuScrollOffset = menuSelectedIndex - 3;
+      }
+      if (rightBtn) {
+        menuSelectedIndex = (menuSelectedIndex + 1) % activeMenuOptionCount;
+        if (menuSelectedIndex < menuScrollOffset) menuScrollOffset = 0;
+        else if (menuSelectedIndex >= menuScrollOffset + 4) menuScrollOffset = menuSelectedIndex - 3;
+      }
       if (middleBtn) {
         switch (menuSelectedIndex) {
           case 0: // Close menu
@@ -323,7 +373,7 @@ void loop() {
             break;
           case 1: // Go to eep / Wake up
             if (menuReturnState == GameState::SLEEPING) {
-              happinessLevel = (happinessLevel + HAPPINESS_SLEEP_BONUS > 100) ? 100 : happinessLevel + HAPPINESS_SLEEP_BONUS;
+              addHappiness(HAPPINESS_SLEEP_BONUS);
               aliveStartedAt          = millis();
               lastHungerDepletedAt    = aliveStartedAt;
               lastHappinessDepletedAt = aliveStartedAt;
@@ -340,14 +390,26 @@ void loop() {
             feedingStartedAt = millis();
             gameState        = GameState::FEEDING;
             break;
+          case 3: // Pat the Tia
+            interactingLabel     = "Pat the Tia";
+            interactingBonus     = HAPPINESS_PAT_BONUS;
+            interactingStartedAt = millis();
+            gameState            = GameState::INTERACTING;
+            break;
+          case 4: // Play with Kitties
+            interactingLabel     = "Play with Kitties";
+            interactingBonus     = HAPPINESS_KITTIES_BONUS;
+            interactingStartedAt = millis();
+            gameState            = GameState::INTERACTING;
+            break;
         }
       }
       break;
     }
     case GameState::FEEDING:
       if (millis() - feedingStartedAt >= FEEDING_DURATION_MS) {
-        hungerLevel    = 100;
-        happinessLevel = (happinessLevel + HAPPINESS_FEED_BONUS > 100) ? 100 : happinessLevel + HAPPINESS_FEED_BONUS;
+        addHunger(FEED_HUNGER_BONUS);
+        addHappiness(HAPPINESS_FEED_BONUS);
         aliveStartedAt          = millis();
         lastHungerDepletedAt    = aliveStartedAt;
         lastHappinessDepletedAt = aliveStartedAt;
@@ -356,6 +418,19 @@ void loop() {
         gameState    = GameState::ALIVE;
       }
       break;
+    case GameState::INTERACTING: {
+      uint16_t interactDuration = (interactingLabel == "Pat the Tia") ? 4000 : INTERACTION_DURATION_MS;
+      if (millis() - interactingStartedAt >= interactDuration) {
+        addHappiness(interactingBonus);
+        aliveStartedAt          = millis();
+        lastHungerDepletedAt    = aliveStartedAt;
+        lastHappinessDepletedAt = aliveStartedAt;
+        lastHappinessSleepyAt   = aliveStartedAt;
+        lastEepDepletedAt       = aliveStartedAt;
+        gameState               = GameState::ALIVE;
+      }
+      break;
+    }
     case GameState::DIED:
       if (anyButton) resetGame();
       break;
@@ -372,7 +447,8 @@ void loop() {
     case GameState::ALIVE:    drawAlive();    break;
     case GameState::SLEEPING: drawSleeping(); break;
     case GameState::MENU:     drawMenu();     break;
-    case GameState::FEEDING:  drawFeeding();  break;
+    case GameState::FEEDING:     drawFeeding();     break;
+    case GameState::INTERACTING: drawInteracting(); break;
     case GameState::DIED:     drawDied();     break;
   }
 
