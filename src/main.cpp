@@ -357,11 +357,6 @@ void loop() {
     }
     case GameState::MENU: {
       if (leftBtn) {
-        menuSelectedIndex = (menuSelectedIndex + activeMenuOptionCount - 1) % activeMenuOptionCount;
-        if (menuSelectedIndex < menuScrollOffset) menuScrollOffset = menuSelectedIndex;
-        else if (menuSelectedIndex >= menuScrollOffset + 4) menuScrollOffset = menuSelectedIndex - 3;
-      }
-      if (rightBtn) {
         menuSelectedIndex = (menuSelectedIndex + 1) % activeMenuOptionCount;
         if (menuSelectedIndex < menuScrollOffset) menuScrollOffset = 0;
         else if (menuSelectedIndex >= menuScrollOffset + 4) menuScrollOffset = menuSelectedIndex - 3;
